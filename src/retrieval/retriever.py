@@ -81,20 +81,17 @@ class Retriever:
                 - url       : str   — ссылка на пост
                 - score     : float — cosine similarity (0..1, чем выше — тем лучше)
         """
-        logger.info("Retriever.retrieve() | query=%r | channel=%s | date_from=%s | date_to=%s | top_k=%d",
-                    query, top_k)
+        
+        logger.info("Retriever.retrieve() | query=%r | top_k=%d", query, top_k)
 
         # 1. Embed query
         t0 = time.perf_counter()
         query_embedding = self._embed_query(query)
         logger.debug("Query embedded in %.3fs", time.perf_counter() - t0)
 
-        # 2. Build metadata filter
-        where_filter = self._build_where_filter(channel, date_from, date_to)
-
-        # 3. Vector search in ChromaDB
+        # 2. Vector search in ChromaDB
         t1 = time.perf_counter()
-        results = self._vector_search(query_embedding, top_k=top_k, where=where_filter)
+        results = self._vector_search(query_embedding, top_k=top_k)
         logger.info("Vector search returned %d chunks in %.3fs", len(results), time.perf_counter() - t1)
 
         return results
@@ -116,7 +113,6 @@ class Retriever:
         self,
         query_embedding: list[float],
         top_k: int,
-        where: Optional[dict],
     ) -> list[dict]:
         """
         Запрос к ChromaDB, возвращает нормализованные словари.
@@ -129,8 +125,6 @@ class Retriever:
             "n_results": top_k,
             "include": ["documents", "metadatas", "distances"],
         }
-        if where:
-            kwargs["where"] = where
 
         raw = self._collection.query(**kwargs)
 
