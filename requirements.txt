@@ -1,0 +1,7 @@
+telethon==1.36.0
+voyageai==0.3.2
+chromadb==0.5.23
+anthropic==0.40.0
+streamlit==1.41.0
+python-dotenv==1.0.1
+tiktoken==0.8.0
