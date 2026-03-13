@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 *.session
 .python-version
+*.key
+*.pub
+CONTEXT.md
