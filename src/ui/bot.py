@@ -6,11 +6,12 @@ bot.py — Telegram-бот поверх RAG-цепочки.
     - /clear  — сброс истории диалога
     - Любое сообщение → RAG-ответ + источники
     - Отдельное сообщение с оценкой (только если найдены источники)
+    - После оценки → кнопка "Задать новый вопрос 🔄" (сбрасывает историю)
 
 История диалога:
     Каждый пользователь получает свой экземпляр RAGChain.
     Хранится in-memory: dict[user_id → RAGChain].
-    Сбрасывается командой /clear или перезапуском бота.
+    Сбрасывается командой /clear, кнопкой "Задать новый вопрос" или перезапуском бота.
 
 Привязка оценки к ответу:
     Данные каждого ответа хранятся по message_id сообщения с кнопками.
@@ -180,12 +181,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # --- Отдельное сообщение с кнопками оценки (только если есть источники) ---
     if sources:
-        # Сначала отправляем сообщение с кнопками, чтобы получить его message_id
+        # Отправляем с временным id=0, потом обновим клавиатуру с реальным message_id
         rating_msg = await update.message.reply_text(
             "Понравился ли вам ответ? Поставьте оценку по шкале от 1 до 5:",
-            reply_markup=_make_rating_keyboard(user_id, 0),  # временный 0
+            reply_markup=_make_rating_keyboard(user_id, 0),
         )
-        # Теперь знаем message_id — перестраиваем клавиатуру с правильным id
+        # Перестраиваем клавиатуру с реальным message_id
         keyboard = _make_rating_keyboard(user_id, rating_msg.message_id)
         await rating_msg.edit_reply_markup(reply_markup=keyboard)
 
@@ -201,7 +202,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка нажатия на кнопку оценки."""
     cb = update.callback_query
-    await cb.answer()  # убирает "часики" у кнопки
+    await cb.answer()
 
     # Формат callback_data: "rate:{user_id}:{message_id}:{score}"
     try:
@@ -223,7 +224,7 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Берём данные ответа по message_id — всегда правильный вопрос
     result_data = _pending_ratings.pop(message_id, None)
     if not result_data:
-        # Уже оценено или истекло
+        # Уже оценено
         await cb.edit_message_reply_markup(reply_markup=None)
         return
 
@@ -241,17 +242,53 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as exc:
             logger.exception("Failed to save feedback: %s", exc)
 
-    # Убираем кнопки, заменяем текст на подтверждение
-    stars = "⭐" * score
+    # Убираем кнопки оценки, подтверждаем
     try:
         await cb.edit_message_text("Спасибо за обратную связь!")
     except Exception as exc:
         logger.warning("Could not edit message: %s", exc)
 
+    # Кнопка "Задать новый вопрос" — очищает историю диалога
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "Задать новый вопрос 🔄",
+            callback_data=f"new_question:{actual_user_id}",
+        )
+    ]])
+    await cb.message.reply_text("Хотите спросить что-то ещё?", reply_markup=keyboard)
+
     logger.info(
         "Rating saved | user_id=%d | score=%d | query=%r",
         actual_user_id, score, result_data["query"],
     )
+
+
+async def new_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка нажатия 'Задать новый вопрос' — сброс истории диалога."""
+    cb = update.callback_query
+    await cb.answer()
+
+    try:
+        _, target_user_id_str = cb.data.split(":")
+        target_user_id = int(target_user_id_str)
+    except (ValueError, AttributeError):
+        logger.warning("Invalid callback data: %r", cb.data)
+        return
+
+    actual_user_id = update.effective_user.id
+    if actual_user_id != target_user_id:
+        return
+
+    # Сбрасываем историю
+    if actual_user_id in _chains:
+        _chains[actual_user_id].clear_history()
+
+    try:
+        await cb.edit_message_text("История очищена. Задавайте новый вопрос 👇")
+    except Exception as exc:
+        logger.warning("Could not edit message: %s", exc)
+
+    logger.info("New question / history cleared | user_id=%d", actual_user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +314,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("clear", clear_handler))
     app.add_handler(CallbackQueryHandler(rating_callback, pattern=r"^rate:"))
+    app.add_handler(CallbackQueryHandler(new_question_callback, pattern=r"^new_question:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     logger.info("Bot starting...")
