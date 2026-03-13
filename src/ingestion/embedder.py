@@ -12,7 +12,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# --- Voyage AI клиент (новый API) ---
+# --- Voyage AI клиент ---
 _voyage_client = voyageai.Client(api_key=config.VOYAGE_API_KEY)
 
 # --- ChromaDB ---
@@ -85,49 +85,52 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
     return embeddings
 
 
-def index_chunks(chunks: list[dict], batch_size: int = 100) -> None:
+def index_posts(posts: list[dict], batch_size: int = 100) -> None:
     """
-    Индексирует чанки в ChromaDB.
-    Пропускает уже существующие chunk_id (идемпотентность).
+    Индексирует посты в ChromaDB.
+    ID записи: <channel>_<post_id>
+    Пропускает уже существующие (идемпотентность).
     """
-    if not chunks:
-        logger.warning("Нет чанков для индексации")
+    if not posts:
+        logger.warning("Нет постов для индексации")
         return
 
-    # Проверяем какие chunk_id уже есть в коллекции
-    existing = set(_collection.get(ids=[c["chunk_id"] for c in chunks])["ids"])
-    new_chunks = [c for c in chunks if c["chunk_id"] not in existing]
+    post_ids = [f"{p['channel']}_{p['post_id']}" for p in posts]
 
-    if not new_chunks:
-        logger.info("Все чанки уже проиндексированы, пропускаем")
+    # Проверяем какие посты уже есть в коллекции
+    existing = set(_collection.get(ids=post_ids)["ids"])
+    new_posts = [p for p in posts if f"{p['channel']}_{p['post_id']}" not in existing]
+
+    if not new_posts:
+        logger.info("Все посты уже проиндексированы, пропускаем")
         return
 
-    logger.info(f"Индексируем {len(new_chunks)} новых чанков (батч={batch_size})")
+    logger.info(f"Индексируем {len(new_posts)} новых постов (батч={batch_size})")
 
-    for i in range(0, len(new_chunks), batch_size):
-        batch = new_chunks[i : i + batch_size]
+    for i in range(0, len(new_posts), batch_size):
+        batch = new_posts[i : i + batch_size]
 
-        texts = [c["text"] for c in batch]
+        texts = [p["text"] for p in batch]
         embeddings = get_embeddings(texts)
 
         _collection.add(
-            ids=[c["chunk_id"] for c in batch],
+            ids=[f"{p['channel']}_{p['post_id']}" for p in batch],
             embeddings=embeddings,
             documents=texts,
             metadatas=[
                 {
-                    "channel": c["channel"],
-                    "post_id": c["post_id"],
-                    "date": c["date"],
-                    "url": c["url"],
+                    "channel": p["channel"],
+                    "post_id": p["post_id"],
+                    "date": p["date"],
+                    "url": p["url"],
                 }
-                for c in batch
+                for p in batch
             ],
         )
 
-        logger.info(f"  Проиндексировано батч {i // batch_size + 1}: {len(batch)} чанков")
+        logger.info(f"  Проиндексировано батч {i // batch_size + 1}: {len(batch)} постов")
 
-    logger.info(f"Индексация завершена. Всего в коллекции: {_collection.count()} чанков")
+    logger.info(f"Индексация завершена. Всего в коллекции: {_collection.count()} постов")
 
 
 def get_collection_stats() -> dict:

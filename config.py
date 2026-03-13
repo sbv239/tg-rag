@@ -14,14 +14,32 @@ TELEGRAM_CHANNELS = [
     "the_daily_winegraph",
     "takoe_vino",
     "winegeekspb",
-    "drunk_monday"
+    "drunk_monday",
+    "inmyglass",
+    "winestate",
+    "drunken_masta",
+    "vraskovOFF",
+    "okolovina",
+    "simple_wine_news",
+    "RamonSosnovskiy",
+    "SommIlya",
+    "dp_trade_telegram",
+    "thewineology",
+    "drinkitaly",
+    "murashko_anna_wine",
+    "nikasomm",
+    "wineretail",
+    "Wineandme_AltoAdige",
+    "sawwwaa",
+    "caxapandwine",
+    "nevvino"
 ]
 
 # Сколько последних постов грузить с каждого канала
 POSTS_LIMIT = None
 
 # Минимальная длина поста (символов) — короткие посты не индексируем
-MIN_POST_LENGTH = 50
+MIN_POST_LENGTH = 250
 
 # --- API Keys ---
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
@@ -32,10 +50,6 @@ EMBEDDING_MODEL = "voyage-4-lite"
 LLM_MODEL = "claude-sonnet-4-5"
 LLM_MAX_TOKENS = 2500     # максимум токенов в ответе
 LLM_TEMPERATURE = 0.2      # низкая температура = фактические ответы, меньше галлюцинаций
-
-# --- Чанкинг ---
-CHUNK_SIZE = 500       # токенов
-CHUNK_OVERLAP = 50     # токенов
 
 # --- ChromaDB ---
 CHROMA_DB_PATH = "data/chroma_db"
