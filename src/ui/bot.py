@@ -5,12 +5,17 @@ bot.py — Telegram-бот поверх RAG-цепочки.
     - /start  — приветствие и инструкция
     - /clear  — сброс истории диалога
     - Любое сообщение → RAG-ответ + источники
-    - Inline-кнопки оценки ⭐–⭐⭐⭐⭐⭐ (только если найдены источники)
+    - Отдельное сообщение с оценкой (только если найдены источники)
 
 История диалога:
     Каждый пользователь получает свой экземпляр RAGChain.
     Хранится in-memory: dict[user_id → RAGChain].
     Сбрасывается командой /clear или перезапуском бота.
+
+Привязка оценки к ответу:
+    Данные каждого ответа хранятся по message_id сообщения с кнопками.
+    Это гарантирует что оценка всегда идёт к правильному вопросу,
+    даже если пользователь задал несколько вопросов подряд.
 
 Запуск:
     python -m src.ui.bot
@@ -20,6 +25,7 @@ import logging
 import os
 import time
 
+from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -33,6 +39,8 @@ from telegram.ext import (
 
 from src.generation.chain import RAGChain
 from src.ui.feedback import FeedbackDB
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +63,9 @@ WELCOME_MESSAGE = (
 
 RATING_LABELS = {1: "1 ⭐", 2: "2 ⭐", 3: "3 ⭐", 4: "4 ⭐", 5: "5 ⭐"}
 
-# Ключ для хранения данных последнего ответа в user_data (для привязки оценки)
-LAST_RESULT_KEY = "last_result"
+# Хранилище данных ответов: message_id → result dict
+# Позволяет правильно привязать оценку к конкретному ответу
+_pending_ratings: dict[int, dict] = {}
 
 # ---------------------------------------------------------------------------
 # Глобальные объекты (инициализируются один раз при старте)
@@ -91,12 +100,12 @@ def _format_sources(sources: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _make_rating_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Inline-клавиатура с оценками 1–5."""
+def _make_rating_keyboard(user_id: int, message_id: int) -> InlineKeyboardMarkup:
+    """Inline-клавиатура с оценками 1–5. message_id привязывает кнопки к конкретному ответу."""
     buttons = [
         InlineKeyboardButton(
             text=label,
-            callback_data=f"rate:{user_id}:{score}",
+            callback_data=f"rate:{user_id}:{message_id}:{score}",
         )
         for score, label in RATING_LABELS.items()
     ]
@@ -118,8 +127,6 @@ async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     if user_id in _chains:
         _chains[user_id].clear_history()
-    # Очищаем также сохранённый последний результат
-    context.user_data.pop(LAST_RESULT_KEY, None)
     await update.message.reply_text("🗑 История диалога очищена.")
     logger.info("/clear | user_id=%d", user_id)
 
@@ -160,62 +167,64 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # --- Формируем текст ответа ---
     reply_text = answer
-
     if sources:
         sources_block = _format_sources(sources)
         reply_text = f"{answer}\n\n📎 *Источники:*\n{sources_block}"
 
     # --- Отправляем ответ ---
+    await update.message.reply_text(
+        reply_text,
+        parse_mode=ParseMode.MARKDOWN,
+        disable_web_page_preview=True,
+    )
+
+    # --- Отдельное сообщение с кнопками оценки (только если есть источники) ---
     if sources:
-        # С кнопками оценки
-        keyboard = _make_rating_keyboard(user_id)
-        await update.message.reply_text(
-            reply_text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=keyboard,
-            disable_web_page_preview=True,
+        # Сначала отправляем сообщение с кнопками, чтобы получить его message_id
+        rating_msg = await update.message.reply_text(
+            "Понравился ли вам ответ? Поставьте оценку по шкале от 1 до 5:",
+            reply_markup=_make_rating_keyboard(user_id, 0),  # временный 0
         )
-        # Сохраняем данные для привязки оценки
-        context.user_data[LAST_RESULT_KEY] = {
+        # Теперь знаем message_id — перестраиваем клавиатуру с правильным id
+        keyboard = _make_rating_keyboard(user_id, rating_msg.message_id)
+        await rating_msg.edit_reply_markup(reply_markup=keyboard)
+
+        # Сохраняем данные ответа по message_id кнопок
+        _pending_ratings[rating_msg.message_id] = {
             "query": query,
             "answer": answer,
             "sources": sources,
             "response_time_s": response_time,
         }
-    else:
-        # Без кнопок — источники не найдены
-        await update.message.reply_text(
-            reply_text,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-        )
 
 
 async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка нажатия на кнопку оценки."""
-    query = update.callback_query
-    await query.answer()  # убирает "часики" у кнопки
+    cb = update.callback_query
+    await cb.answer()  # убирает "часики" у кнопки
 
-    # Формат callback_data: "rate:{user_id}:{score}"
+    # Формат callback_data: "rate:{user_id}:{message_id}:{score}"
     try:
-        _, target_user_id_str, score_str = query.data.split(":")
+        _, target_user_id_str, message_id_str, score_str = cb.data.split(":")
         score = int(score_str)
         target_user_id = int(target_user_id_str)
+        message_id = int(message_id_str)
     except (ValueError, AttributeError):
-        logger.warning("Invalid callback data: %r", query.data)
+        logger.warning("Invalid callback data: %r", cb.data)
         return
 
     actual_user_id = update.effective_user.id
 
     # Защита: оценивать может только тот, кто задал вопрос
     if actual_user_id != target_user_id:
-        await query.answer("Это не твой вопрос 😊", show_alert=True)
+        await cb.answer("Это не твой вопрос 😊", show_alert=True)
         return
 
-    # Берём данные последнего ответа
-    last_result = context.user_data.get(LAST_RESULT_KEY)
-    if not last_result:
-        await query.edit_message_reply_markup(reply_markup=None)
+    # Берём данные ответа по message_id — всегда правильный вопрос
+    result_data = _pending_ratings.pop(message_id, None)
+    if not result_data:
+        # Уже оценено или истекло
+        await cb.edit_message_reply_markup(reply_markup=None)
         return
 
     # Сохраняем оценку
@@ -223,27 +232,26 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         try:
             _feedback_db.save(
                 user_id=actual_user_id,
-                query=last_result["query"],
-                answer=last_result["answer"],
-                sources=last_result["sources"],
+                query=result_data["query"],
+                answer=result_data["answer"],
+                sources=result_data["sources"],
                 rating=score,
-                response_time_s=last_result["response_time_s"],
+                response_time_s=result_data["response_time_s"],
             )
         except Exception as exc:
             logger.exception("Failed to save feedback: %s", exc)
 
-    # Убираем кнопки и ставим подтверждение
+    # Убираем кнопки, заменяем текст на подтверждение
     stars = "⭐" * score
     try:
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(f"Спасибо за оценку! {stars}")
+        await cb.edit_message_text("Спасибо за обратную связь!")
     except Exception as exc:
         logger.warning("Could not edit message: %s", exc)
 
-    # Очищаем last_result чтобы повторное нажатие не сохраняло дубли
-    context.user_data.pop(LAST_RESULT_KEY, None)
-
-    logger.info("Rating saved | user_id=%d | score=%d", actual_user_id, score)
+    logger.info(
+        "Rating saved | user_id=%d | score=%d | query=%r",
+        actual_user_id, score, result_data["query"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +265,7 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN не задан в .env")
