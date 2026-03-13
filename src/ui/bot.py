@@ -172,12 +172,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         sources_block = _format_sources(sources)
         reply_text = f"{answer}\n\n📎 *Источники:*\n{sources_block}"
 
-    # --- Отправляем ответ ---
-    await update.message.reply_text(
-        reply_text,
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True,
-    )
+    # --- Отправляем ответ (fallback на plain text если Markdown сломан) ---
+    try:
+        await update.message.reply_text(
+            reply_text,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        logger.warning("Markdown parse failed, retrying as plain text")
+        await update.message.reply_text(
+            reply_text,
+            disable_web_page_preview=True,
+        )
 
     # --- Отдельное сообщение с кнопками оценки (только если есть источники) ---
     if sources:
