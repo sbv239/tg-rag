@@ -3,15 +3,11 @@ bot.py — Telegram-бот поверх RAG-цепочки.
 
 Функциональность:
     - /start  — приветствие и инструкция
-    - /clear  — сброс истории диалога
     - Любое сообщение → RAG-ответ + источники
     - Отдельное сообщение с оценкой (только если найдены источники)
-    - После оценки → кнопка "Задать новый вопрос 🔄" (сбрасывает историю)
 
-История диалога:
-    Каждый пользователь получает свой экземпляр RAGChain.
-    Хранится in-memory: dict[user_id → RAGChain].
-    Сбрасывается командой /clear, кнопкой "Задать новый вопрос" или перезапуском бота.
+Один экземпляр RAGChain на всё приложение — история диалога не хранится,
+каждый вопрос обрабатывается независимо.
 
 Привязка оценки к ответу:
     Данные каждого ответа хранятся по message_id сообщения с кнопками.
@@ -57,9 +53,7 @@ WELCOME_MESSAGE = (
     "Например:\n"
     "• Какие вина из Бургундии стоит попробовать?\n"
     "• Что писали про Barolo в последнее время?\n"
-    "• Чем отличается Шабли от других Шардоне?\n\n"
-    "Команды:\n"
-    "/clear — сбросить историю диалога"
+    "• Чем отличается Шабли от других Шардоне?\n"
 )
 
 RATING_LABELS = {1: "1 ⭐", 2: "2 ⭐", 3: "3 ⭐", 4: "4 ⭐", 5: "5 ⭐"}
@@ -72,16 +66,8 @@ _pending_ratings: dict[int, dict] = {}
 # Глобальные объекты (инициализируются один раз при старте)
 # ---------------------------------------------------------------------------
 
-_chains: dict[int, RAGChain] = {}   # user_id → RAGChain
+_chain: RAGChain | None = None
 _feedback_db: FeedbackDB | None = None
-
-
-def _get_chain(user_id: int) -> RAGChain:
-    """Вернуть (или создать) RAGChain для пользователя."""
-    if user_id not in _chains:
-        logger.info("Creating new RAGChain for user_id=%d", user_id)
-        _chains[user_id] = RAGChain()
-    return _chains[user_id]
 
 
 # ---------------------------------------------------------------------------
@@ -123,15 +109,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info("/start | user_id=%d", update.effective_user.id)
 
 
-async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/clear — сброс истории диалога."""
-    user_id = update.effective_user.id
-    if user_id in _chains:
-        _chains[user_id].clear_history()
-    await update.message.reply_text("🗑 История диалога очищена.")
-    logger.info("/clear | user_id=%d", user_id)
-
-
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка входящего вопроса → RAG-ответ."""
     user_id = update.effective_user.id
@@ -142,14 +119,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     logger.info("Incoming query | user_id=%d | query=%r", user_id, query)
 
-    # Индикатор печатания пока думаем
     await update.message.chat.send_action("typing")
 
-    chain = _get_chain(user_id)
     t_start = time.perf_counter()
 
     try:
-        result = chain.ask(query)
+        result = _chain.ask(query)
     except Exception as exc:
         logger.exception("RAGChain error | user_id=%d | error=%s", user_id, exc)
         await update.message.reply_text(
@@ -188,16 +163,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # --- Отдельное сообщение с кнопками оценки (только если есть источники) ---
     if sources:
-        # Отправляем с временным id=0, потом обновим клавиатуру с реальным message_id
         rating_msg = await update.message.reply_text(
             "Понравился ли вам ответ? Поставьте оценку по шкале от 1 до 5:",
             reply_markup=_make_rating_keyboard(user_id, 0),
         )
-        # Перестраиваем клавиатуру с реальным message_id
         keyboard = _make_rating_keyboard(user_id, rating_msg.message_id)
         await rating_msg.edit_reply_markup(reply_markup=keyboard)
 
-        # Сохраняем данные ответа по message_id кнопок
         _pending_ratings[rating_msg.message_id] = {
             "query": query,
             "answer": answer,
@@ -223,19 +195,15 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     actual_user_id = update.effective_user.id
 
-    # Защита: оценивать может только тот, кто задал вопрос
     if actual_user_id != target_user_id:
         await cb.answer("Это не твой вопрос 😊", show_alert=True)
         return
 
-    # Берём данные ответа по message_id — всегда правильный вопрос
     result_data = _pending_ratings.pop(message_id, None)
     if not result_data:
-        # Уже оценено
         await cb.edit_message_reply_markup(reply_markup=None)
         return
 
-    # Сохраняем оценку
     if _feedback_db is not None:
         try:
             _feedback_db.save(
@@ -249,20 +217,10 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as exc:
             logger.exception("Failed to save feedback: %s", exc)
 
-    # Убираем кнопки оценки, подтверждаем
     try:
         await cb.edit_message_text("Спасибо за обратную связь!")
     except Exception as exc:
         logger.warning("Could not edit message: %s", exc)
-
-    # Кнопка "Задать новый вопрос" — очищает историю диалога
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "Задать новый вопрос 🔄",
-            callback_data=f"new_question:{actual_user_id}",
-        )
-    ]])
-    await cb.message.reply_text("Хотите спросить что-то ещё?", reply_markup=keyboard)
 
     logger.info(
         "Rating saved | user_id=%d | score=%d | query=%r",
@@ -270,40 +228,12 @@ async def rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
-async def new_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработка нажатия 'Задать новый вопрос' — сброс истории диалога."""
-    cb = update.callback_query
-    await cb.answer()
-
-    try:
-        _, target_user_id_str = cb.data.split(":")
-        target_user_id = int(target_user_id_str)
-    except (ValueError, AttributeError):
-        logger.warning("Invalid callback data: %r", cb.data)
-        return
-
-    actual_user_id = update.effective_user.id
-    if actual_user_id != target_user_id:
-        return
-
-    # Сбрасываем историю
-    if actual_user_id in _chains:
-        _chains[actual_user_id].clear_history()
-
-    try:
-        await cb.edit_message_text("История очищена. Задавайте новый вопрос 👇")
-    except Exception as exc:
-        logger.warning("Could not edit message: %s", exc)
-
-    logger.info("New question / history cleared | user_id=%d", actual_user_id)
-
-
 # ---------------------------------------------------------------------------
 # Запуск бота
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    global _feedback_db
+    global _chain, _feedback_db
 
     logging.basicConfig(
         level=logging.INFO,
@@ -314,14 +244,13 @@ def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN не задан в .env")
 
+    _chain = RAGChain()
     _feedback_db = FeedbackDB()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("clear", clear_handler))
     app.add_handler(CallbackQueryHandler(rating_callback, pattern=r"^rate:"))
-    app.add_handler(CallbackQueryHandler(new_question_callback, pattern=r"^new_question:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
     logger.info("Bot starting...")

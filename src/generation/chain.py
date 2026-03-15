@@ -1,16 +1,16 @@
 """
 chain.py — RAG-цепочка: query preprocessing → retrieval → generation.
 
-Точка входа для всей RAG-логики. Используется как из UI (app.py),
+Точка входа для всей RAG-логики. Используется как из UI (bot.py),
 так и из консоли (python -m src.generation.chain).
 
 Query preprocessing живёт здесь же — ~25 строк, отдельный модуль избыточен.
+История диалога не поддерживается — каждый вопрос обрабатывается независимо.
 """
 
 import logging
 import re
 import time
-from typing import Optional
 
 import anthropic
 
@@ -81,25 +81,23 @@ def preprocess_query(query: str) -> str:
 
 class RAGChain:
     """
-    Основная RAG-цепочка.
+    Основная RAG-цепочка. Один экземпляр на всё приложение.
+
+    Каждый вопрос обрабатывается независимо — история диалога не хранится.
+    Это упрощает кодовую базу и снижает стоимость запросов к Claude.
 
     Пример использования:
         chain = RAGChain()
-        result = chain.ask("Что писали про Nvidia на этой неделе?")
+        result = chain.ask("Что писали про Бургундию?")
         print(result["answer"])
         for src in result["sources"]:
             print(src["url"])
-
-    Поддерживает диалог:
-        result2 = chain.ask("А что по поводу AMD?")  # история сохраняется автоматически
-        chain.clear_history()                         # сброс диалога
     """
 
     def __init__(self) -> None:
         logger.info("Initializing RAGChain...")
         self._retriever = Retriever()
         self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        self._chat_history: list[dict] = []
         logger.info("RAGChain ready. Model: %s", LLM_MODEL)
 
     # ------------------------------------------------------------------
@@ -116,15 +114,15 @@ class RAGChain:
         Задать вопрос RAG-цепочке.
 
         Args:
-            query:     Вопрос пользователя (сырой текст).
-            top_k:     Количество чанков для retrieval.
+            query:  Вопрос пользователя (сырой текст).
+            top_k:  Количество чанков для retrieval.
 
         Returns:
             {
-                "answer":  str           — ответ Claude,
-                "sources": list[dict]    — список источников [{channel, url, date, post_id}],
-                "chunks":  list[dict]    — полные чанки (для отладки),
-                "query_processed": str   — запрос после preprocessing,
+                "answer":          str        — ответ Claude,
+                "sources":         list[dict] — [{channel, url, date, post_id}],
+                "chunks":          list[dict] — полные чанки (для отладки),
+                "query_processed": str        — запрос после preprocessing,
             }
         """
         t_start = time.perf_counter()
@@ -135,29 +133,18 @@ class RAGChain:
 
         # 2. Retrieval
         t_ret = time.perf_counter()
-        chunks = self._retriever.retrieve(
-            processed_query,
-            top_k=top_k,
-        )
+        chunks = self._retriever.retrieve(processed_query, top_k=top_k)
         logger.info("Retrieved %d chunks in %.3fs", len(chunks), time.perf_counter() - t_ret)
 
         # 3. Build prompt
-        messages = build_rag_prompt(
-            query=query,           # пользователю показываем оригинальный вопрос
-            chunks=chunks,
-            chat_history=self._chat_history,
-        )
+        messages = build_rag_prompt(query=query, chunks=chunks)
 
         # 4. Generate answer
         t_gen = time.perf_counter()
         answer = self._generate(messages)
         logger.info("Generation completed in %.3fs", time.perf_counter() - t_gen)
 
-        # 5. Update chat history
-        self._chat_history.append({"role": "user", "content": messages[-1]["content"]})
-        self._chat_history.append({"role": "assistant", "content": answer})
-
-        # 6. Extract sources (дедупликация по url)
+        # 5. Extract sources (дедупликация по url)
         sources = self._extract_sources(chunks)
 
         total_time = time.perf_counter() - t_start
@@ -172,16 +159,6 @@ class RAGChain:
             "chunks": chunks,
             "query_processed": processed_query,
         }
-
-    def clear_history(self) -> None:
-        """Сбросить историю диалога."""
-        self._chat_history = []
-        logger.info("Chat history cleared.")
-
-    @property
-    def history(self) -> list[dict]:
-        """Копия истории диалога (read-only)."""
-        return list(self._chat_history)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -220,7 +197,6 @@ class RAGChain:
                     "post_id": chunk["post_id"],
                 })
 
-        # Сортируем по дате (ISO строки сортируются лексикографически корректно)
         sources.sort(key=lambda x: x["date"], reverse=True)
         return sources
 
@@ -230,23 +206,15 @@ class RAGChain:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import argparse
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    parser = argparse.ArgumentParser(description="TG-RAG консольный чат")
-    parser.add_argument("--channel", default=None, help="Фильтр по каналу")
-    parser.add_argument("--date-from", default=None, help="Дата от (YYYY-MM-DD)")
-    parser.add_argument("--date-to", default=None, help="Дата до (YYYY-MM-DD)")
-    args = parser.parse_args()
-
     chain = RAGChain()
 
     print("\n=== TG-RAG Консольный чат ===")
-    print("Введите вопрос. 'exit' для выхода, 'clear' для сброса истории.\n")
+    print("Введите вопрос. 'exit' для выхода.\n")
 
     while True:
         try:
@@ -260,14 +228,8 @@ if __name__ == "__main__":
         if user_input.lower() == "exit":
             print("Выход.")
             break
-        if user_input.lower() == "clear":
-            chain.clear_history()
-            print("История диалога очищена.\n")
-            continue
 
-        result = chain.ask(
-            user_input,
-        )
+        result = chain.ask(user_input)
 
         print(f"\nАссистент: {result['answer']}\n")
 

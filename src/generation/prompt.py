@@ -36,33 +36,21 @@ def build_system_prompt() -> str:
 def build_rag_prompt(
     query: str,
     chunks: list[dict],
-    chat_history: list[dict] | None = None,
 ) -> list[dict]:
     """
     Собрать список сообщений для Anthropic Messages API.
 
     Args:
-        query:        Вопрос пользователя (уже предобработанный).
-        chunks:       Список чанков из retriever'а.
-                      Каждый чанк: {text, channel, post_id, date, url, score}
-        chat_history: Предыдущие сообщения диалога.
-                      Формат: [{"role": "user"|"assistant", "content": str}, ...]
+        query:   Вопрос пользователя.
+        chunks:  Список чанков из retriever'а.
+                 Каждый чанк: {text, channel, post_id, date, url, score}
 
     Returns:
         Список сообщений для передачи в `client.messages.create(messages=...)`.
     """
     context_block = _format_context(chunks)
     user_message = _format_user_message(query, context_block)
-
-    messages = []
-
-    # Добавляем историю диалога (если есть)
-    if chat_history:
-        messages.extend(chat_history)
-
-    messages.append({"role": "user", "content": user_message})
-
-    return messages
+    return [{"role": "user", "content": user_message}]
 
 
 # ---------------------------------------------------------------------------
