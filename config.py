@@ -47,6 +47,7 @@ VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 
 # --- Модели ---
 EMBEDDING_MODEL = "voyage-4-lite"
+RERANKER_MODEL = "rerank-2"          # Voyage AI reranker
 LLM_MODEL = "claude-sonnet-4-5"
 LLM_MAX_TOKENS = 2500     # максимум токенов в ответе
 LLM_TEMPERATURE = 0.2      # низкая температура = фактические ответы, меньше галлюцинаций
@@ -59,7 +60,9 @@ COLLECTION_NAME = "tg_posts"
 EMBEDDING_CACHE_PATH = "data/embedding_cache"
 
 # --- Retrieval ---
-TOP_K = 10                    # чанков из векторного поиска
-HYBRID_VECTOR_WEIGHT = 0.7    # вес векторного поиска в fusion
-HYBRID_BM25_WEIGHT = 0.3      # вес BM25 в fusion
-RERANKER_TOP_N = 5            # чанков после reranking подаём в LLM
+TOP_K = 20              # кандидатов из каждого поиска (vector и BM25) — больше кандидатов для reranker
+RERANKER_TOP_N = 5      # постов после reranking подаём в LLM
+
+# Веса для возможной линейной fusion (не используются при RRF, оставлены для экспериментов)
+HYBRID_VECTOR_WEIGHT = 0.7
+HYBRID_BM25_WEIGHT = 0.3
