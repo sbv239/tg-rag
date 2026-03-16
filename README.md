@@ -17,33 +17,38 @@ Each answer includes inline source citations in the format `[channel](url)`. Onl
 ## Architecture
 
 ```
-flowchart TD
-    subgraph ingestion[" Ingestion "]
-        TC[Telegram Channels] --> TL[telegram_loader.py\nTelethon · incremental]
-        TL --> EM[embedder.py\nVoyage voyage-4-lite · cache]
-        EM --> DB[(ChromaDB\nVector store)]
-    end
+Telegram Channels
+      │
+      ▼
+telegram_loader.py   ←  Telethon, incremental (state per channel)
+      │
+      ▼
+embedder.py          ←  Voyage AI voyage-4-lite, local embedding cache
+      │
+      ▼
+ChromaDB             ←  Persistent vector store (cosine similarity)
 
-    subgraph retrieval[" Retrieval "]
-        Q([User query]) --> VS[Vector search\ntop-20]
-        Q --> BM[BM25 search\ntop-20]
-        DB --> VS
-        VS --> RRF[RRF Fusion\ntop-20]
-        BM --> RRF
-        RRF --> RR[Voyage rerank-2\ntop-5]
-    end
 
-    subgraph generation[" Generation "]
-        RR --> LLM[Claude Sonnet]
-        LLM --> ANS[Answer + cited sources]
-    end
-
-    subgraph feedback[" Feedback "]
-        ANS --> BOT[Telegram Bot]
-        BOT --> FB[Rating 1–5 ⭐]
-        FB --> SQ[(SQLite)]
-    end
-
+Query (Telegram Bot)
+      │
+      ├──► Vector Search   (ChromaDB, top-20)  ─┐
+      │                                          ├──► RRF Fusion → top-20
+      └──► BM25 Search     (in-memory, top-20)  ─┘
+                                                        │
+                                                        ▼
+                                               Voyage rerank-2 → top-5
+                                                        │
+                                                        ▼
+                                                 Claude Sonnet
+                                                        │
+                                                        ▼
+                                           Answer + cited sources
+                                                        │
+                                                        ▼
+                                           Feedback buttons (1–5 ⭐)
+                                                        │
+                                                        ▼
+                                                   SQLite DB
 ```
 
 ---
