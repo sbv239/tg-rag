@@ -62,7 +62,3 @@ EMBEDDING_CACHE_PATH = "data/embedding_cache"
 # --- Retrieval ---
 TOP_K = 20              # кандидатов из каждого поиска (vector и BM25) — больше кандидатов для reranker
 RERANKER_TOP_N = 5      # постов после reranking подаём в LLM
-
-# Веса для возможной линейной fusion (не используются при RRF, оставлены для экспериментов)
-HYBRID_VECTOR_WEIGHT = 0.7
-HYBRID_BM25_WEIGHT = 0.3

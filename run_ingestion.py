@@ -1,7 +1,6 @@
 import logging
 
 import chromadb
-chromadb.config.Settings(anonymized_telemetry=False)
 
 from src.ingestion.telegram_loader import load_posts
 from src.ingestion.embedder import index_posts, get_collection_stats

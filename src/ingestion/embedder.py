@@ -63,7 +63,7 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
             indices_to_embed.append(i)
 
     cache_hits = len(texts) - len(texts_to_embed)
-    logger.info(f"Эмбеддинги: {cache_hits} cache hit, {len(texts_to_embed)} новых")
+    logger.info("Эмбеддинги: %d cache hit, %d новых", cache_hits, len(texts_to_embed))
 
     if texts_to_embed:
         t0 = time.time()
@@ -73,7 +73,7 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
             input_type="document",
         )
         elapsed = time.time() - t0
-        logger.info(f"Voyage AI: получено {len(texts_to_embed)} эмбеддингов за {elapsed:.2f}с")
+        logger.info("Voyage AI: получено %d эмбеддингов за %.2fс", len(texts_to_embed), elapsed)
 
         for idx, embedding in zip(indices_to_embed, result.embeddings):
             embeddings[idx] = embedding
@@ -105,7 +105,7 @@ def index_posts(posts: list[dict], batch_size: int = 100) -> None:
         logger.info("Все посты уже проиндексированы, пропускаем")
         return
 
-    logger.info(f"Индексируем {len(new_posts)} новых постов (батч={batch_size})")
+    logger.info("Индексируем %d новых постов (батч=%d)", len(new_posts), batch_size)
 
     for i in range(0, len(new_posts), batch_size):
         batch = new_posts[i : i + batch_size]
@@ -128,9 +128,9 @@ def index_posts(posts: list[dict], batch_size: int = 100) -> None:
             ],
         )
 
-        logger.info(f"  Проиндексировано батч {i // batch_size + 1}: {len(batch)} постов")
+        logger.info("  Проиндексировано батч %d: %d постов", i // batch_size + 1, len(batch))
 
-    logger.info(f"Индексация завершена. Всего в коллекции: {_collection.count()} постов")
+    logger.info("Индексация завершена. Всего в коллекции: %d постов", _collection.count())
 
 
 def get_collection_stats() -> dict:

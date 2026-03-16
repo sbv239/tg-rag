@@ -27,6 +27,7 @@ from config import (
     COLLECTION_NAME,
     VOYAGE_API_KEY,
     EMBEDDING_MODEL,
+    RERANKER_MODEL,
     TOP_K,
     RERANKER_TOP_N,
 )
@@ -343,7 +344,7 @@ class Retriever:
         response = self._voyage.rerank(
             query=query,
             documents=texts,
-            model="rerank-2",
+            model=RERANKER_MODEL,
             top_k=top_n,
         )
 

@@ -165,10 +165,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if sources:
         rating_msg = await update.message.reply_text(
             "Понравился ли вам ответ? Поставьте оценку по шкале от 1 до 5:",
-            reply_markup=_make_rating_keyboard(user_id, 0),
         )
-        keyboard = _make_rating_keyboard(user_id, rating_msg.message_id)
-        await rating_msg.edit_reply_markup(reply_markup=keyboard)
+        await rating_msg.edit_reply_markup(
+            reply_markup=_make_rating_keyboard(user_id, rating_msg.message_id)
+        )
 
         _pending_ratings[rating_msg.message_id] = {
             "query": query,
