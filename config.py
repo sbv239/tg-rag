@@ -32,7 +32,8 @@ TELEGRAM_CHANNELS = [
     "Wineandme_AltoAdige",
     "sawwwaa",
     "caxapandwine",
-    "nevvino"
+    "nevvino",
+    "wineacademia",
 ]
 
 # Сколько последних постов грузить с каждого канала
