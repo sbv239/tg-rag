@@ -144,12 +144,12 @@ class RAGChain:
         answer = self._generate(messages)
         logger.info("Generation completed in %.3fs", time.perf_counter() - t_gen)
 
-        # 5. Extract sources (дедупликация по url)
-        sources = self._extract_sources(chunks)
+        # 5. Только те источники, которые Claude реально процитировал в ответе
+        sources = self._extract_used_sources(answer, chunks)
 
         total_time = time.perf_counter() - t_start
         logger.info(
-            "RAGChain.ask() done in %.3fs | chunks=%d | sources=%d",
+            "RAGChain.ask() done in %.3fs | chunks=%d | cited_sources=%d",
             total_time, len(chunks), len(sources),
         )
 
@@ -176,28 +176,53 @@ class RAGChain:
         return response.content[0].text
 
     @staticmethod
-    def _extract_sources(chunks: list[dict]) -> list[dict]:
+    def _extract_used_sources(answer: str, chunks: list[dict]) -> list[dict]:
         """
-        Дедуплицировать источники по url и вернуть список для отображения.
+        Вернуть только те источники, url которых Claude реально использовал в ответе.
 
-        Возвращает: [{channel, url, date, post_id}, ...]
-        Сортировка: по дате убывания (самые свежие — первыми).
+        Claude цитирует источники в формате [название канала](url) — стандартный
+        Markdown-линк. Парсим все url из ответа и фильтруем chunks по совпадению.
+
+        Порядок в выдаче: по первому появлению в ответе (как Claude расставил приоритеты),
+        а не по дате — так список источников отражает логику ответа.
         """
-        seen_urls = set()
-        sources = []
+        # Находим все url из markdown-ссылок в ответе Claude
+        cited_urls = re.findall(r'\[(?:[^\]]+)\]\((https?://[^)]+)\)', answer)
 
+        if not cited_urls:
+            logger.debug("No cited URLs found in answer — returning empty sources")
+            return []
+
+        # Строим маппинг url → chunk для быстрого поиска
+        url_to_chunk = {}
         for chunk in chunks:
             url = chunk.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
+            if url and url not in url_to_chunk:
+                url_to_chunk[url] = chunk
+
+        # Собираем источники в порядке появления в ответе, без дублей
+        seen_urls: set[str] = set()
+        sources = []
+        for url in cited_urls:
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            if url in url_to_chunk:
+                chunk = url_to_chunk[url]
                 sources.append({
                     "channel": chunk["channel"],
                     "url": url,
                     "date": chunk["date"],
                     "post_id": chunk["post_id"],
                 })
+            else:
+                # Claude сослался на url которого нет в chunks — логируем, пропускаем
+                logger.warning("Cited URL not found in chunks: %s", url)
 
-        sources.sort(key=lambda x: x["date"], reverse=True)
+        logger.debug(
+            "Sources: %d chunks → %d cited",
+            len(chunks), len(sources),
+        )
         return sources
 
 
