@@ -34,6 +34,10 @@ TELEGRAM_CHANNELS = [
     "caxapandwine",
     "nevvino",
     "wineacademia",
+    "Beaglesomm",
+    "winebanktelegram",
+    "winebureaurwc",
+    "madvocatehungary",
 ]
 
 # Сколько последних постов грузить с каждого канала
