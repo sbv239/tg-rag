@@ -38,6 +38,8 @@ TELEGRAM_CHANNELS = [
     "winebanktelegram",
     "winebureaurwc",
     "madvocatehungary",
+    "drinknashe",
+    "real_authentic_wine",
 ]
 
 # Сколько последних постов грузить с каждого канала
@@ -66,4 +68,4 @@ EMBEDDING_CACHE_PATH = "data/embedding_cache"
 
 # --- Retrieval ---
 TOP_K = 20              # кандидатов из каждого поиска (vector и BM25) — больше кандидатов для reranker
-RERANKER_TOP_N = 5      # постов после reranking подаём в LLM
+RERANKER_TOP_N = 7      # постов после reranking подаём в LLM
